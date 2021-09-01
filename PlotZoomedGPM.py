@@ -11,7 +11,7 @@ s2 = 50
 fps = 10
 datadone_path = "./datadone/"
 data_path = "./data/"
-image_path = "./images/"
+image_path = "./3d_images/"
 
 fig = gp.plot_earth_wrapped()
 # Loop through all files in datadone folder, get them using netCDF4, and plot them all in one step

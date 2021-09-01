@@ -4,6 +4,9 @@ from ftplib import FTP_TLS
 import numpy as np
 from mayavi import mlab
 import convert
+import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+
 
 DEBUG = True
 base_dir = "./pub/gpmdata/"
@@ -45,6 +48,46 @@ def get_files(datetime: str, dest: str, username: str, password: str):
         log("Downloaded " + file_name)
         file.close()
     ftp.quit()
+
+def plot_lonlatref_2d(data, lat_min, lat_max, title=None, save_path="./2d_images/"):
+    """Plots a contour plot of Longitude x Latitude x Reflectivity, given GPM data.
+
+    Args:
+        data (netCDF4 Dataset): 2A.GPM.DPRX.V8 data from GPM.
+        lat_min (float): Minimum value of latitude range.
+        lat_max (float): Maximum value of latitude range.
+        title (str): Title for plot.
+        save_path (str): Where the screenshot should be saved to.
+    """
+    my_cmap = [(57/255, 78/255, 157/255), (0, 159/255, 60/255), (248/255, 244/255, 0),(1, 0, 0), (1, 1, 1)]
+    my_cmap = colors.LinearSegmentedColormap.from_list("Reflectivity", my_cmap, N=26)
+    swath = data["FS"]
+    # Pick center of footprint
+    lat = swath["Latitude"][:, 24]
+    # Limit data to be between the min and max lat
+    selected_inds = (lat >= lat_min) & (lat <= lat_max)
+    pre = swath["PRE"]
+    obs = pre["zFactorMeasured"][selected_inds, 24, :, 0].T
+    alt = pre["height"][selected_inds,24,:].T / 1000.0
+    lat = lat[selected_inds]
+    lat = np.array([[x] * 176 for x in lat]).T
+    obs[obs < -48] = np.nan
+    obs[obs > 48] = np.nan
+    # Give date as title, if one is not given
+    if title is None:
+        year = data["FS"]["ScanTime"]["Year"][0]
+        month = data["FS"]["ScanTime"]["Month"][0]
+        day = data["FS"]["ScanTime"]["DayOfMonth"][0]
+        title = f'{year}-{month:02}-{day:02}'
+    plt.contourf(lat, alt, obs, cmap=my_cmap, levels=26)
+    plt.title(title)
+    plt.xlabel("Latitude, deg")
+    plt.ylabel("Altitude, km")
+    plt.colorbar(label="Reflectivity (dbz)")
+    plt.ylim((0, 21))
+    plt.xlim((lat.min(), lat.max()))
+    full_path = save_path + title
+    plt.savefig(full_path, facecolor='white', transparent=False)
 
 def plot_earth_wrapped(earth_tex_path="./Textures/EarthMap_2500x1250.jpg", star_tex_path="./Textures/starmap.png"):
     """Plots a 3D model of the earth with a starmap in the background in Mayavi.
@@ -130,7 +173,7 @@ def plot_earth_wrapped(earth_tex_path="./Textures/EarthMap_2500x1250.jpg", star_
 
     return fig
 
-def plot_gpm_data(data, fig, step=1, save_location="./images/"):
+def plot_gpm_data(data, fig, step=1, save_location="./3d_images/"):
     """Given GPM dataset in HDF5 format and a figure to plot it on, it plots the reflectivity data in step steps, and saves each step to save_location.
 
     Args:
