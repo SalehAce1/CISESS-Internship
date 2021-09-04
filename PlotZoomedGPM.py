@@ -5,6 +5,7 @@ import cv2
 from os import fsencode, fsdecode, listdir
 from os.path import splitext
 import datetime
+import pathlib
 
 s1 = 1
 s2 = 50
@@ -18,19 +19,21 @@ fig = gp.plot_earth_wrapped()
 directory = fsencode(datadone_path)
 fig.scene.disable_render = True
 for file in listdir(directory):
+    file_type = pathlib.Path(fsdecode(file)).suffix
     target = datadone_path + fsdecode(file)
     print("Doing", target)
     data2A = netCDF4.Dataset(target, diskless=True, persist=False)
-    gp.plot_gpm_data(data2A, fig, step=s1)
+    gp.plot_gpm_data(data2A, fig, step=s1, file_type=file_type)
     data2A.close()
 
 # Loop through all files in data folder, get them using netCDF4, and plot/save them step by step
 directory = fsencode(data_path)
 for file in listdir(directory):
+    file_type = pathlib.Path(fsdecode(file)).suffix
     target = data_path + fsdecode(file)
     print("Doing", target)
     data2A = netCDF4.Dataset(target, diskless=True, persist=False)
-    gp.plot_gpm_data(data2A, fig, step=s2)
+    gp.plot_gpm_data(data2A, fig, step=s2, file_type=file_type)
     data2A.close()
 
 mlab.close()
