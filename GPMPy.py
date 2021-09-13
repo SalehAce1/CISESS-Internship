@@ -213,7 +213,7 @@ def plot_gpm_data(data, fig, step=1, save_location="./3d_images/", file_type=".H
         fig (mlab figure): The figure the data should be plotted on.
         step (int): Number of steps it should take to plot the whole figure, by default equals 1 which means the entire data will be plotted in one step.
         save_location (str): Where the screenshot in each step should be saved to.
-        file_type (str): Type of file the data is coming from, HDF5 by default.
+        file_type (str): Raw ".HDF5" file or compressed ".nc" file. 
     """
     obs = lat = lon = st = None
 
@@ -305,6 +305,7 @@ def plot_lonlatref_2d(data, lat_min, lat_max, title=None, save_path="./2d_images
         lat_max (float): Maximum value of latitude range.
         title (str): Title for plot.
         save_path (str): Where the screenshot should be saved to.
+        file_type (str): Raw ".HDF5" file or compressed ".nc" file. 
     """
     my_cmap = [(57/255, 78/255, 157/255), (0, 159/255, 60/255), (248/255, 244/255, 0),(1, 0, 0), (1, 1, 1)]
     my_cmap = colors.LinearSegmentedColormap.from_list("Reflectivity", my_cmap, N=26)
@@ -316,17 +317,15 @@ def plot_lonlatref_2d(data, lat_min, lat_max, title=None, save_path="./2d_images
         obs = pre["zFactorMeasured"][:, :, :, 0]
         # Latitude data
         lat = swath["Latitude"][:]
-        # Longitude data
-        alt = swath["height"][:]
+        alt = pre["height"][:]
         # Times data
-        st = data["FS"]["ScanTime"]
+        ds = data["FS"]["ScanTime"]
     elif file_type == ".nc":
         lat = data["Latitude"][:]
         obs = data["zFactorMeasured"][:]
         alt = data["height"][:]
         ds = data
 
-    lat = lat[:, 24]
     # Limit data to be between the min and max lat
     selected_inds = (lat >= lat_min) & (lat <= lat_max)
     obs = obs[selected_inds, 24, :].T
@@ -350,3 +349,60 @@ def plot_lonlatref_2d(data, lat_min, lat_max, title=None, save_path="./2d_images
     plt.xlim((lat.min(), lat.max()))
     full_path = save_path + title
     plt.savefig(full_path, facecolor='white', transparent=False)
+
+def plot_front_2d(data, x0, x1, title=None, save_path="./2d_images/", file_type=".HDF5"):
+    """Plots a contour plot of Footprint x Altitude x Reflectivity, given GPM data.
+
+    Args:
+        data (netCDF4 Dataset): 2A.GPM.DPRX.V8 data from GPM.
+        x0 (int): Range of indices the function should plot graphs for.
+        x1 (int): Range of indices the function should plot graphs for.
+        title (str): Title for plot.
+        save_path (str): Where the screenshot should be saved to.
+        file_type (str): Raw ".HDF5" file or compressed ".nc" file. 
+    """
+    my_cmap = [(57/255, 78/255, 157/255), (0, 159/255, 60/255), (248/255, 244/255, 0),(1, 0, 0), (1, 1, 1)]
+    my_cmap = colors.LinearSegmentedColormap.from_list("Reflectivity", my_cmap, N=26)
+    obs = alt = ds = None
+
+    if file_type == ".HDF5":
+        swath = data["FS"]
+        pre = swath["PRE"]
+        obs = pre["zFactorMeasured"][:, :, :, 0]
+        alt = pre["height"][:]
+        ds = data["FS"]["ScanTime"]
+    elif file_type == ".nc":
+        obs = data["zFactorMeasured"][:]
+        alt = data["height"][:]
+        ds = data
+
+    # Limit data to be between the min and max range
+    # Shape is (range, footprint, height)
+    obs = obs[x0:x1, :, :].T
+    alt = alt[x0:x1, :, :].T / 1000
+    obs[obs < -48] = np.nan
+    obs[obs > 48] = np.nan
+
+    # Give date as title, if one is not given
+    if title is None:
+        year = ds["Year"][0]
+        month = ds["Month"][0]
+        day = ds["DayOfMonth"][0]
+        title = f'{year}-{month:02}-{day:02}'
+
+    footprint = np.array([np.full((176,), x) for x in range(0, 245, 5)]).T
+    for layer_i in range(obs.shape[2]):
+        # (footprint, height)
+        obs_i = obs[:, :, layer_i]
+        alt_i = alt[:, :, layer_i]
+        plt.contourf(footprint, alt_i, obs_i, cmap=my_cmap, levels=26)
+        plt.title(title)
+        plt.xlabel("Footprint, km")
+        plt.ylabel("Altitude, km")
+        plt.colorbar(label="Reflectivity (dbz)")
+        plt.ylim((0, 21))
+        plt.xlim((0, 245))
+        plt.clim((0, 50))
+        full_path = save_path + f"/{layer_i:05}"
+        plt.savefig(full_path, facecolor='white', transparent=False)
+        plt.clf()
