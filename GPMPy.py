@@ -380,8 +380,9 @@ def plot_front_2d(data, x0, x1, title=None, save_path="./2d_images/", file_type=
     # Shape is (range, footprint, height)
     obs = obs[x0:x1, :, :].T
     alt = alt[x0:x1, :, :].T / 1000
-    obs[obs < -48] = np.nan
-    obs[obs > 48] = np.nan
+    bottom_z = 18
+    obs[obs < bottom_z] = np.nan
+    #obs[obs > 48] = np.nan
 
     # Give date as title, if one is not given
     if title is None:
@@ -402,7 +403,110 @@ def plot_front_2d(data, x0, x1, title=None, save_path="./2d_images/", file_type=
         plt.colorbar(label="Reflectivity (dbz)")
         plt.ylim((0, 21))
         plt.xlim((0, 245))
-        plt.clim((0, 50))
+        plt.clim((bottom_z))
         full_path = save_path + f"/{layer_i:05}"
         plt.savefig(full_path, facecolor='white', transparent=False)
         plt.clf()
+
+def plot_front_3d(data, x0, x1, fig, title=None, save_location="./3d_images/", file_type=".HDF5"):
+    """Given GPM dataset in HDF5 format and a figure to plot it on, it plots the reflectivity data in step steps, and saves each step to save_location.
+
+    Args:
+        data (netCDF4 Dataset): 2A.GPM.DPRX.V8 data from GPM.
+        fig (mlab figure): The figure the data should be plotted on.
+        step (int): Number of steps it should take to plot the whole figure, by default equals 1 which means the entire data will be plotted in one step.
+        save_location (str): Where the screenshot in each step should be saved to.
+        file_type (str): Raw ".HDF5" file or compressed ".nc" file. 
+    """
+    obs = alt = ds = lon = lat = None
+
+    if file_type == ".HDF5":
+        swath = data["FS"]
+        pre = swath["PRE"]
+        obs = pre["zFactorMeasured"][:, :, :, 0]
+        alt = pre["height"][:]
+        lat = swath["Latitude"][:]
+        lon = swath["Longitude"][:]
+        ds = data["FS"]["ScanTime"]
+    elif file_type == ".nc":
+        obs = data["zFactorMeasured"][:]
+        alt = data["height"][:]
+        lat = data["Latitude"][:]
+        lon = data["Longitude"][:]
+        ds = data
+
+    # Limit data to be between the min and max range
+    # Shape is (range, footprint, height)
+    obs = obs[x0:x1, :, :].T
+    lon = lon[x0:x1, :].T
+    lat = lat[x0:x1, :].T
+    alt = alt[x0:x1, :, :].T / 1000
+    bottom_z = 18
+    obs[obs < bottom_z] = np.nan
+
+    if title is None:
+        year = ds["Year"][0]
+        month = ds["Month"][0]
+        day = ds["DayOfMonth"][0]
+        title = f'{year}-{month:02}-{day:02}'
+
+    #(height, footprint)
+    footprint = np.array([np.full((176,), x) for x in range(0, 245, 5)]).T
+    for layer_i in range(obs.shape[2]):
+        
+        #lat_i = (lat_i / lat_i.max()) + 1.001
+        # (height, footprint)
+        for h_i in range(len(alt)):
+            #print(obs.shape, alt.shape, lon.shape, lat.shape)
+            obs_i = obs[h_i, :, layer_i]
+            alt_i = alt[h_i, :, layer_i]
+            alt_i = (alt_i / alt_i.max()) + 0.001
+            lon_i = lon[:, layer_i]
+            lat_i = lat[:, layer_i]
+            x, y, z = convert.polar_to_cartesian(lon_i, lat_i, alt_i)
+            mlab.plot3d(x, y, z, obs_i, tube_radius=None, figure=fig, opacity=0.6, vmin=0.11, vmax=0.12)
+            mlab.view()
+            #mlab.savefig(save_location + "wow" + str(layer_i) + ".png")
+    mlab.show()
+
+
+    # # Loop for the number of steps we need to do
+    # a,b = x0, x1
+    # # Calculate for each footprint
+    # for footprint_ind in range(49):
+    #     # Convert lon-lat data in current step and footprint to cartesian
+    #     x, y, z = convert.polar_to_cartesian(lon[a:b, footprint_ind], lat[a:b, footprint_ind], 1.001)
+    #     # Get reflectivity data for current step and footprint
+    #     s = obs_mean[footprint_ind, a:b]
+
+    #     # TODO Implement VIL instead of just taking mean
+    #     # s = obs[:, footprint_ind, a:b]
+    #     # h = alt[:, footprint_ind, a:b]
+    #     # Calculating vertically integrated liquid (VIL)
+    #     # z_mean =  0.5*(s[:-1] + s[1:])
+    #     # dh = np.abs(h[1:] - h[:-1])
+    #     # vil = np.nansum((3.44 * np.power(10.0, -6.0) * np.power(z_mean, 4.0/7.0)) * dh, axis=0)
+
+    #     mlab.plot3d(x, y, z, s, tube_radius=None, figure=fig, opacity=0.6, vmin=0.11, vmax=0.12)
+
+    #     # Calculate where the center of the current step's longitude data is so we can set the camera there 
+    #     lon_mid_ind = (a+b)//2
+    #     if lon_mid_ind >= lon.shape[0]: lon_mid_ind = lon.shape[0] - 1
+    #     lon_mid = lon[lon_mid_ind, footprint_ind] % 360
+
+    #     # Calculate where the center of the current step's latitude data is so we can set the camera there
+    #     lat_mid_ind = (a+b)//2
+    #     if lat_mid_ind >= lat.shape[0]: lat_mid_ind = lat.shape[0] - 1
+    #     lat_mid = c_lat[lat_mid_ind, footprint_ind]
+    #     lat_mid2 = lat_mid % 360
+
+    #     # Set the position of camera
+    #     mlab.view(lon_mid, lat_mid2, 2.2)
+    #     # Getting the name of each image screenshot based on date the data is from and its index and saving the image
+    #     month = st["Month"][lon_mid_ind]
+    #     day = st["DayOfMonth"][lon_mid_ind]
+    #     hour = st["Hour"][lon_mid_ind]
+    #     minute = st["Minute"][lon_mid_ind]
+    #     second = st["Second"][lon_mid_ind]
+    #     start_name = f'{month:02}-{day:02}-{hour:02}-{minute:02}-{second:02}'
+    #     mlab.savefig(save_location + start_name + ".png")
