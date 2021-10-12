@@ -457,7 +457,7 @@ def plot_front_3d(data, x0, x1, fig, title=None, save_location="./3d_images/", f
         #lat_i = (lat_i / lat_i.max()) + 1.001
         # (height, footprint)
         for h_i in range(len(alt)):
-            #print(obs.shape, alt.shape, lon.shape, lat.shape)
+            print(obs.shape, alt.shape, lon.shape, lat.shape)
             obs_i = obs[h_i, :, layer_i]
             alt_i = alt[h_i, :, layer_i]
             alt_i = (alt_i / alt_i.max()) + 0.001
@@ -469,44 +469,36 @@ def plot_front_3d(data, x0, x1, fig, title=None, save_location="./3d_images/", f
             #mlab.savefig(save_location + "wow" + str(layer_i) + ".png")
     mlab.show()
 
+import re 
+class RadarDisplay:
+    
+    FILETYPE = ".HDF5"
+    PREFIX = "2A.GPM.DPRX.V8-20200326."
+    SUFFIX = ".V06X.HDF5"
 
-    # # Loop for the number of steps we need to do
-    # a,b = x0, x1
-    # # Calculate for each footprint
-    # for footprint_ind in range(49):
-    #     # Convert lon-lat data in current step and footprint to cartesian
-    #     x, y, z = convert.polar_to_cartesian(lon[a:b, footprint_ind], lat[a:b, footprint_ind], 1.001)
-    #     # Get reflectivity data for current step and footprint
-    #     s = obs_mean[footprint_ind, a:b]
+    def __init__(self, data_path: str):
+        directory = listdir(fsencode(data_path))
+        pattern = r"^(\d{8})-S(\d{6})-E(\d{6}).*$"
+        dt_format = "%Y%m%d %H%M%S"
+        st_p = len(data_path) + len(self.PREFIX)
+        ed_p = len(self.SUFFIX)
 
-    #     # TODO Implement VIL instead of just taking mean
-    #     # s = obs[:, footprint_ind, a:b]
-    #     # h = alt[:, footprint_ind, a:b]
-    #     # Calculating vertically integrated liquid (VIL)
-    #     # z_mean =  0.5*(s[:-1] + s[1:])
-    #     # dh = np.abs(h[1:] - h[:-1])
-    #     # vil = np.nansum((3.44 * np.power(10.0, -6.0) * np.power(z_mean, 4.0/7.0)) * dh, axis=0)
+        self.files = [data_path + fsdecode(f) for f in directory if self.FILETYPE in fsdecode(f)]
 
-    #     mlab.plot3d(x, y, z, s, tube_radius=None, figure=fig, opacity=0.6, vmin=0.11, vmax=0.12)
+        self.f_to_dt = {}
+        for f_path_extr in self.files:
+            f_path = f_path_extr[st_p:-ed_p]
+            grps = re.search(pattern, f_path)
+            f_start = dt.datetime.strptime(grps.group(1) + " " + grps.group(2), dt_format)
+            f_end = dt.datetime.strptime(grps.group(1) + " " + grps.group(3), dt_format)
+            self.f_to_dt[f_path_extr] = (f_start, f_end)
 
-    #     # Calculate where the center of the current step's longitude data is so we can set the camera there 
-    #     lon_mid_ind = (a+b)//2
-    #     if lon_mid_ind >= lon.shape[0]: lon_mid_ind = lon.shape[0] - 1
-    #     lon_mid = lon[lon_mid_ind, footprint_ind] % 360
+    def get_files_by_dt(self, start: dt, end: dt):
+        files = []
 
-    #     # Calculate where the center of the current step's latitude data is so we can set the camera there
-    #     lat_mid_ind = (a+b)//2
-    #     if lat_mid_ind >= lat.shape[0]: lat_mid_ind = lat.shape[0] - 1
-    #     lat_mid = c_lat[lat_mid_ind, footprint_ind]
-    #     lat_mid2 = lat_mid % 360
-
-    #     # Set the position of camera
-    #     mlab.view(lon_mid, lat_mid2, 2.2)
-    #     # Getting the name of each image screenshot based on date the data is from and its index and saving the image
-    #     month = st["Month"][lon_mid_ind]
-    #     day = st["DayOfMonth"][lon_mid_ind]
-    #     hour = st["Hour"][lon_mid_ind]
-    #     minute = st["Minute"][lon_mid_ind]
-    #     second = st["Second"][lon_mid_ind]
-    #     start_name = f'{month:02}-{day:02}-{hour:02}-{minute:02}-{second:02}'
-    #     mlab.savefig(save_location + start_name + ".png")
+        for f_path, f_dts in self.f_to_dt.items():
+            f_st, f_ed = f_dts
+            if f_st >= start and f_ed <= end:
+                files.append(f_path)
+        
+        return files
