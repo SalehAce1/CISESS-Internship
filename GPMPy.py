@@ -476,7 +476,11 @@ class RadarDisplay:
     PREFIX = "2A.GPM.DPRX.V8-20200326."
     SUFFIX = ".V06X.HDF5"
 
-    def __init__(self, data_path: str):
+    def __init__(self, data_path: str, username: str, password: str, debug_mode=False):
+        self.data_path = data_path
+        self.username = username
+        self.password = password
+        self.debug = debug_mode
         directory = listdir(fsencode(data_path))
         pattern = r"^(\d{8})-S(\d{6})-E(\d{6}).*$"
         dt_format = "%Y%m%d %H%M%S"
@@ -493,6 +497,38 @@ class RadarDisplay:
             f_end = dt.datetime.strptime(grps.group(1) + " " + grps.group(3), dt_format)
             self.f_to_dt[f_path_extr] = (f_start, f_end)
 
+    def download_files(self, start: dt, end: dt, files: list[str]):
+        """Gets hdf files from the GPM FTP server based on date
+
+        Args:
+            date (str): Date of the files for the day you want in yyyy/mm/dd format
+            dest (str): Destination folder we want to download to
+            username (str): GPM username
+            password (str): GPM password
+        """
+        base_dir = "./pub/gpmdata/"
+        base_dir = "{}{}/{:02d}/{:02d}/Xradar".format(base_dir, start.year, start.month, start.day)
+        link = "arthurhou.pps.eosdis.nasa.gov"
+        st_name = "{}{}{:02d}{:02d}-".format(self.PREFIX, start.year, start.month, start.day)
+        ed_name = "{}{}{:02d}{:02d}-".format(self.PREFIX, end.year, end.month, end.day)
+
+        # Get files for that day
+        ftp = FTP_TLS(link)
+        ftp.login(user=self.username, passwd=self.password)
+        ftp.cwd(base_dir)
+        file_names = ftp.nlst()
+        for file_name in file_names:
+            if target_name not in file_name: continue
+            local_filename = os.path.join(dest, file_name)
+            if os.path.exists(local_filename):
+                log("Skipping " + file_name)
+                continue
+            file = open(local_filename, 'wb')
+            ftp.retrbinary('RETR '+ file_name, file.write)
+            log("Downloaded " + file_name)
+            file.close()
+        ftp.quit()
+
     def get_files_by_dt(self, start: dt, end: dt):
         files = []
 
@@ -501,4 +537,13 @@ class RadarDisplay:
             if f_st >= start and f_ed <= end:
                 files.append(f_path)
         
+        delta = end - start
+        for i in range(delta.days + 1):
+            day = start + dt.timedelta(days=i)
+            # Now download files for start to end but only the ones we dont have
+            # append those paths to files as well
         return files
+
+    def log(self, o: object):
+        if not self.debug: return
+        print("[DEBUG]:", o)
