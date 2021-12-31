@@ -1,8 +1,9 @@
 import os
-from os import fsencode, fsdecode, listdir
+from os import fsencode, fsdecode, listdir, remove
 from os.path import splitext
 import datetime as dt
 from ftplib import FTP_TLS, FTP
+import ssl
 import numpy as np
 from mayavi import mlab
 import convert
@@ -16,47 +17,57 @@ import pathlib
 from PIL import Image
 import cv2
 import pandas as pd
-import re 
+import re
 import read_cloudsat as rc
+import drpy.core.gpmdpr as drp
+from multiprocessing.dummy import Pool as ThreadPool
 
 
 class RadarDisplay:
     
-    FILETYPE = ".HDF5"
     PREFIX = "2A.GPM.DPRX.V8-20200326."
-    SUFFIX = ".V06X.HDF5"
+    SUFFIX = ".V06X"
     IMG_PATH = "./combined_images/"
     IMG_2D_PATH = "./2d_images/"
     IMG_3D_PATH = "./3d_images/"
     CLOUDSAT_LINK = "ftp.cloudsat.cira.colostate.edu"
-    GPM_LINK = "arthurhou.pps.eosdis.nasa.gov"
+    GPM_LINK = "arthurhouftps.pps.eosdis.nasa.gov"
 
-
+    
     class FileType(Enum):
         HDF5 = ".HDF5"
         NC = ".nc"
         HDF = ".HDF"
 
-    def __init__(self, data_path: str, username: str, password: str, is_gpm=True, debug_mode=False):
+    def __init__(self, data_path: str, debug_mode=False):
         self.data_path = data_path
-        self.username = username
-        self.password = password
+        self.u_gpm = self.p_gpm = self.u_cloudsat = self.p_cloudsat = None
         self.debug = debug_mode
-        directory = listdir(fsencode(data_path))
+        self.gpm_files = []
+        self.f_to_dt = {}
 
         os.makedirs(os.path.dirname(self.IMG_PATH), exist_ok=True)
         os.makedirs(os.path.dirname(self.IMG_2D_PATH), exist_ok=True)
         os.makedirs(os.path.dirname(self.IMG_3D_PATH), exist_ok=True)
+    
+    def set_account_cloudsat(self, username: str, password: str):
+        self.u_cloudsat = username
+        self.p_cloudsat = password
+    
+    def set_account_gpm(self, username: str, password: str):
+        self.u_gpm = username
+        self.p_gpm = password
+    
+    def set_data_path(self, data_path: str):
+        self.data_path = data_path
+    
+    def set_debug(self, toggle: bool):
+        self.debug = toggle
 
-        self.files = [fsdecode(f) for f in directory if self.FILETYPE in fsdecode(f)]
-        self.f_to_dt = {}
-
-        for f_path_extr in self.files:
-            f_start, f_end = self.get_dt_from_name(f_path_extr)
-            self.f_to_dt[f_path_extr] = (f_start, f_end)
-
-    def get_dt_from_name(self, filename: str) -> Tuple[dt.datetime, dt.datetime]:
+    # Get date-time of a file from its name
+    def get_dt_from_name_gpm(self, filename: str) -> Tuple[dt.datetime, dt.datetime]:
         pattern = r"^(\d{8})-S(\d{6})-E(\d{6}).*$"
+        filename = splitext(filename)[0]
         dt_format = "%Y%m%d %H%M%S"
         st_p = len(self.PREFIX)
         ed_p = len(self.SUFFIX)
@@ -67,7 +78,7 @@ class RadarDisplay:
         
         return (f_start, f_end) 
 
-    def download_files(self, start: dt, end: dt, files: List[str]):
+    def download_files_gpm(self, start: dt, end: dt, files: List[str]):
         """Gets hdf files from the GPM FTP server based on date
 
         Args:
@@ -78,8 +89,16 @@ class RadarDisplay:
 
         base_dir = "./pub/gpmdata/"
         type_pattern = "^{}.*{}$".format(self.PREFIX, self.SUFFIX) 
-        ftp = FTP_TLS(self.GPM_LINK)
-        ftp.login(user=self.username, passwd=self.password)
+        if self.u_gpm is None or self.p_gpm is None:
+            exit("Please set username/password for GPM using set_account_gpm")
+
+        FTP_TLS.ssl_version = ssl.PROTOCOL_TLSv1_2 
+        ftp = FTP_TLS() 
+        ftp.debugging = 1 if self.debug else 0
+        ftp.connect(self.GPM_LINK, 21) 
+        ftp.login(self.u_gpm, self.p_gpm) 
+        ftp.prot_p() 
+
         ftp.cwd(base_dir)
 
         delta = end - start
@@ -90,29 +109,101 @@ class RadarDisplay:
             file_names = ftp.nlst()
 
             for file_name in file_names:
+                self.log("(Get) Checking: " + file_name)
                 # ignore if we have it
-                if file_name in files: continue
+                if file_name in files or splitext(file_name)[0] + ".nc" in files:
+                    self.log("(Skip) Already have: " + file_name)
+                    continue
                 # ignore if not the correct type of file
-                if re.match(type_pattern, file_name) is None: continue
+                if re.match(type_pattern, splitext(file_name)[0]) is None:
+                    self.log("(Skip) Does not fit pattern: " + file_name)
+                    continue
                 # ignore if not within timeframe
-                (s_dt, e_dt) = self.get_dt_from_name(file_name)
+                (s_dt, e_dt) = self.get_dt_from_name_gpm(file_name)
                 s_dt = s_dt.replace(minute=0, second=0)
                 e_dt = e_dt.replace(minute=0, second=0)
                 if s_dt < start or e_dt > end: continue
                 local_filename = os.path.join(self.data_path, file_name)
                 files.append(file_name)
-                self.files.append(file_name)
+                self.gpm_files.append(file_name)
                 self.f_to_dt[file_name] = (s_dt, e_dt)
                 file = open(local_filename, 'wb')
                 ftp.retrbinary('RETR '+ file_name, file.write)
-                self.log("Downloaded " + file_name)
+                self.log("(Download) Saving: " + file_name)
                 file.close()
             
             ftp.cwd("../../../../")
 
         ftp.quit()
+
+    def convert_multi_gpm(self, files, del_old_files=False, thread_cnt=1):
+        bad_ones = ['flagSurfaceSnow','binBBTop','binBBBottom','flagPrecip','typePrecip','phaseNearSurface','precipRateNearSurface',
+                    'nearsurfaceKu','nearsurfaceKa','epsilon','MSKa_c','NSKu','MSKa','R','Dm_dpr','Nw_dpr']
+
+        def convert_one_gpm(filename):
+            tmp = drp.GPMDPR(filename=filename)
+            fixed_gpm = tmp.xrds.drop_vars(bad_ones)
+            comp = dict(zlib=True, complevel=5)
+            encoding = {var: comp for var in fixed_gpm.data_vars}
+            new_name = splitext(filename)[0] + ".nc"
+            fixed_gpm.to_netcdf(new_name, encoding=encoding, engine='netcdf4')
+            if del_old_files:
+                remove(filename)
+
+            return new_name
+
+        pool = ThreadPool(thread_cnt)
+        all_new_files = pool.map(convert_one_gpm, files)
+        pool.close()
+        pool.join()
+
+        return all_new_files
+
+    def get_files_by_dt_gpm(self, start: dt, end: dt) -> List[str]:
+
+        directory = listdir(fsencode(self.data_path))
+        # Looks for existing GPM DPR files
+        self.nc_files = []
+        for f in directory:
+            dec = fsdecode(f)
+            if self.FileType.HDF5.value in dec:
+                self.gpm_files.append(dec)
+            elif self.FileType.NC.value in dec:
+                self.nc_files.append(dec)
+        
+        #self.gpm_files.extend([fsdecode(f) for f in directory if self.FileType.HDF5.value in fsdecode(f)])
+        
+        for f_path_extr in self.gpm_files:
+            f_start, f_end = self.get_dt_from_name_gpm(f_path_extr)
+            self.f_to_dt[f_path_extr] = (f_start, f_end)
+
+        for f_path_extr in self.nc_files:
+            f_start, f_end = self.get_dt_from_name_gpm(f_path_extr)
+            self.f_to_dt[f_path_extr] = (f_start, f_end)
+
+        files = []
+
+        for f_path, f_dts in self.f_to_dt.items():
+            # ignore hdf5 if appropriate nc file exists
+            split_name = splitext(f_path)
+            if split_name[1] == self.FileType.HDF5.value and split_name[0] + ".nc" in self.f_to_dt:
+                continue
+            f_st, f_ed = f_dts
+            # ignore minutes and seconds
+            f_st = f_st.replace(minute=0, second=0)
+            f_ed = f_ed.replace(minute=0, second=0)
+            if f_st >= start and f_ed <= end:
+                files.append(f_path)
+        
+        self.download_files_gpm(start, end, files)
+
+        nc_files = [f for f in files if self.FileType.NC.value in f]
+        hdf5_files = [self.data_path + f for f in files if self.FileType.HDF5.value in f]
+        all_new_nc_files = self.convert_multi_gpm(hdf5_files, del_old_files=True)
+
+        return list(set(all_new_nc_files + nc_files))
     
-    def get_cloudsat_files(self, start: dt.datetime, end: dt.datetime, username: str, password: str):
+    def get_files_by_dt_cloudsat(self, start: dt.datetime, end: dt.datetime, username: str, password: str):
         """Gets hdf files from the CloudSat FTP server based on date
 
         Args:
@@ -126,6 +217,11 @@ class RadarDisplay:
 
         dt_range = pd.date_range(start, end, freq="1H")
         self.log("Attempting to access CloudSat ftp server.")
+
+        if self.u_cloudsat is None or self.p_cloudsat is None:
+            print("Please set username/password for CloudSat using set_account_cloudsat")
+            return
+
         ftp = FTP(self.CLOUDSAT_LINK, user=username, passwd=password)
         ftp.login(user=username, passwd=password)
 
@@ -149,21 +245,6 @@ class RadarDisplay:
         ftp.quit()
 
         return rc.read_cloudsat(self.data_path, start, end)
-
-    def get_files_by_dt(self, start: dt, end: dt) -> List[str]:
-        files = []
-
-        for f_path, f_dts in self.f_to_dt.items():
-            f_st, f_ed = f_dts
-            # ignore minutes and seconds for now
-            f_st = f_st.replace(minute=0, second=0)
-            f_ed = f_ed.replace(minute=0, second=0)
-            if f_st >= start and f_ed <= end:
-                files.append(f_path)
-        
-        self.download_files(start, end, files)
-
-        return files
 
 
     def combine_imgs_by_path(self, images1:str, images2:str, out_files, ind: int, cloud_sat=None):
@@ -203,7 +284,7 @@ class RadarDisplay:
         out.release()
 
     def plot_combined(self, start: dt, end: dt, frames: int, fps: int):
-        files = self.get_files_by_dt(start, end)
+        files = self.get_files_by_dt_gpm(start, end)
         files.sort()
         imgs1 = []
         imgs2 = []
@@ -227,8 +308,8 @@ class RadarDisplay:
         self.combine_video(finalimgs, fps)
 
     def plot_combined_with_cloudsat(self, start: dt, end: dt, frames: int, fps: int):
-        files = self.get_files_by_dt(start, end)
-        cs_data = self.get_cloudsat_files(start, end, self.date_path, self.username, self.password)
+        files = self.get_files_by_dt_gpm(start, end)
+        cs_data = self.get_files_by_dt_cloudsat(start, end, self.date_path, self.u_gpm, self.p_gpm)
         cs_title = "{}/cs_img.png".format(self.IMG_2D_PATH)
         self.plot_side_2d(self, cs_data, start, end, cs_title)
         files.sort()
