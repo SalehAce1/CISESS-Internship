@@ -1,2 +1,8 @@
 venv/*
 changes.md
+CloudSat_Test.ipynb
+ContourPlot.py
+FrontPlot2D.py
+FrontPlot3D.py
+PlotZoomedGPM.py
+TestRadarDisplay.py
